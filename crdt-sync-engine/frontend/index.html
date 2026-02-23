@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CRDT Collaborative Editor</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        #editor { 
+            width: 100%; 
+            height: 300px; 
+            border: 1px solid #ccc; 
+            padding: 10px;
+            font-size: 16px;
+        }
+        #status { margin: 10px 0; color: #666; }
+        .connected { color: green; }
+        .disconnected { color: red; }
+    </style>
+</head>
+<body>
+    <h1>Collaborative Editor</h1>
+    <div id="status">Disconnected</div>
+    <textarea id="editor" placeholder="Start typing..."></textarea>
+    <div>
+        <p>Document ID: <span id="docId"></span></p>
+        <button onclick="newDocument()">New Document</button>
+        <button onclick="copyDocId()">Copy Document ID</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/yjs/13.6.18/yjs.min.js"></script>
+    <script>
+        // Configuration
+        const WS_URL = 'ws://localhost:8080/ws';
+        let ydoc = null;
+        let provider = null;
+        let ytext = null;
+        let clientId = localStorage.getItem('clientId') || generateClientId();
+        
+        // Save client ID
+        localStorage.setItem('clientId', clientId);
+        
+        function generateClientId() {
+            return 'client-' + Math.random().toString(36).substr(2, 9);
+        }
+
+        // Get document ID from URL or create new
+        const urlParams = new URLSearchParams(window.location.search);
+        let docId = urlParams.get('docId') || generateDocId();
+        
+        function generateDocId() {
+            return 'doc-' + Math.random().toString(36).substr(2, 9);
+        }
+
+        document.getElementById('docId').textContent = docId;
+        
+        // Update URL without reload
+        window.history.replaceState({}, '', `?docId=${docId}`);
+
+        // Initialize connection
+        function connect() {
+            // Create Yjs document
+            ydoc = new Y.Doc();
+            
+            // Get a text type from the document
+            ytext = ydoc.getText('content');
+            
+            // Connect to our Go WebSocket server
+            const wsUrl = `${WS_URL}?docId=${docId}&clientId=${clientId}`;
+            
+            // Simple WebSocket connection (not the full Yjs provider yet)
+            const ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                document.getElementById('status').innerHTML = '<span class="connected">Connected</span>';
+                
+                // Send initial sync message
+                ws.send(JSON.stringify({
+                    type: 'sync',
+                    docId: docId,
+                    version: 0,
+                    clientId: clientId
+                }));
+            };
+            
+            ws.onclose = () => {
+                document.getElementById('status').innerHTML = '<span class="disconnected">Disconnected</span>';
+            };
+            
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                console.log('Received:', message);
+                
+                if (message.type === 'sync-full' && message.payload) {
+                    // Apply full document state
+                    // In a real implementation, you'd deserialize the CRDT state
+                    // For demo, we'll just update the textarea
+                    document.getElementById('editor').value = new TextDecoder().decode(
+                        new Uint8Array(message.payload)
+                    );
+                }
+            };
+            
+            // Handle editor changes
+            const editor = document.getElementById('editor');
+            editor.addEventListener('input', (e) => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    // Send update to server
+                    const update = {
+                        type: 'update',
+                        docId: docId,
+                        version: Date.now(), // Simple timestamp as version
+                        payload: new TextEncoder().encode(e.target.value),
+                        clientId: clientId
+                    };
+                    
+                    ws.send(JSON.stringify(update));
+                }
+            });
+            
+            // Save for later use
+            window.currentWs = ws;
+        }
+        
+        function newDocument() {
+            // Generate new ID and reload page
+            const newId = generateDocId();
+            window.location.href = `?docId=${newId}`;
+        }
+        
+        function copyDocId() {
+            navigator.clipboard.writeText(docId);
+            alert('Document ID copied to clipboard!');
+        }
+        
+        // Start connection when page loads
+        window.onload = connect;
+    </script>
+</body>
+</html>
